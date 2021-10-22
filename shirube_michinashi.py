@@ -2,10 +2,8 @@ import sys
 import time
 import asyncio
 import discord
-import keyboard
 import requests
 import datetime
-import threading
 from discord.ext import tasks
 from bs4 import BeautifulSoup
 from urllib.parse import unquote
@@ -19,7 +17,6 @@ client = discord.Client(intents=intents)
 
 tokenizer = Tokenizer()
 
-exit_bool = False
 days = ["月","火","水","木","金","土","日"]
 schedule_files = {"1組":'1組時間割.txt', "2組":'2組時間割.txt', "3組":'3組時間割.txt', "4組":'4組時間割.txt', "5組":'5組時間割.txt', }
 
@@ -38,9 +35,29 @@ async def loop():
         f.close()
 """
 
+
+""" membersリストの中から自分を見つける（≒自分のmember型を返す）、これやってくれるやつ絶対discord.pyにあるだろ """
+def find_self_in_members(members):
+    for member in members:
+        if member.id == client.user.id:
+            return member
+    print("client not found")
+    return None
+
+
+""" 引数に指定されたテキストチャンネルのリストから発言可能なチャンネルを1つ返す """
+def search_channel_to_speak(text_channels):
+    for channel in text_channels:
+        self_member = find_self_in_members(channel.members)
+        if self_member != None:
+            if channel.permissions_for(self_member).send_messages:
+                return channel
+    print("channel not found")
+    return None
+
+
+# 終了処理、herokuなどで常駐できるようになれば不要
 async def exit_bot():
-    # print("task loop start")
-    # print("exit is true")
     channel = client.get_channel(channel_id)
     logout_message = ""
     logout_time = datetime.datetime.now()
@@ -61,6 +78,7 @@ async def exit_bot():
     sys.exit()
 
 
+""" 時間割の文字列を作成し返す """
 def schedule_check(atime, classstr, datalines):
     send_schedule = "本日" + days[atime.weekday()] + "曜日の" + classstr + "の時間割です(後期時間割より)。\n======================================\n"
     schedule = datalines[atime.weekday()].split()
@@ -72,6 +90,7 @@ def schedule_check(atime, classstr, datalines):
     return send_schedule
 
 
+""" "https://www.google.com/search?q="以降の文字列を作成 """
 def search_check(count,atoken):
     print(atoken)
     returnchar = ""
@@ -84,7 +103,6 @@ def search_check(count,atoken):
             for i in range(count):
                 returnchar += atoken[i]
             return returnchar
-
     elif count == 1:
         returnchar = atoken[0]
         return returnchar
@@ -92,6 +110,7 @@ def search_check(count,atoken):
         return None
 
 
+""" googleの検索ページをスクレイピングし、結果を返す """
 def search_google(searchwords):
     if searchwords != None:
         try:
@@ -120,6 +139,7 @@ def search_google(searchwords):
         return "検索対象を指定してください。"
 
 
+""" wikipediaの検索ページをスクレイピングし、結果を返す """
 def search_wiki(searchwords):
     if searchwords != None:
         result = ""
@@ -147,7 +167,7 @@ def search_wiki(searchwords):
         return "検索対象を指定してください。"
 
 
-# ログイン時
+""" ログイン時処理、herokuなどで常駐できるようになれば不要 """
 @client.event
 async def on_ready():
     print("logd in\n")
@@ -171,11 +191,10 @@ async def on_ready():
     await channel.send(login_message)
 
 
-# サーバーにほかのメンバーが参加したとき
+""" サーバーにほかのメンバーが参加したとき """
 @client.event
 async def on_member_join(member):
     print("\fいらっしゃいませ、" + member.name + "さま！")
-    print("\npless 'e' and 'x' to stop this bot")
     channel = client.get_channel(channel_id)
     await channel.send("いらっしゃいませ、" + member.name + "さま！")
 
@@ -189,15 +208,14 @@ async def on_member_join(member):
 """
 
 
-# サーバー参加時
+""" サーバー参加時 """
 @client.event
 async def on_guild_join(guild):
     channel = client.get_channel(channel_id)
     join_message = "はじめまして。" + guild.name + "のみなさま、廸無 導（みちなし しるべ）と申します。\n文章の解析やその他ちょっとした機能があります。また機能の追加もありますのでぜひご利用くださいませ。"
     print(join_message)
-    print("\npless 'e' and 'x' to stop this bot")
     await channel.send(join_message)
-    #下は応急処置的にトップにあることの多い参加履歴チャンネルをよけるよう2番目のチャンネルに送信
+
     #将来的にはメッセージ送信権限を確認して権限のあるチャンネルに送信する
 """
     for i in guild.channels:
@@ -225,17 +243,16 @@ async def on_message(message):
         else:
             if message.content == "//end":
                 await exit_bot()
-            # sent = "文章解析結果\n======================================\n"
-            # 文章を形態素解析して単語ごとに分ける
+            elif message.content == "//test":
+                await search_channel_to_speak(message.guild.text_channels).send("test succeeded")
+
+            """ 文章を形態素解析して単語ごとに分ける """
             tokens = []
-            # a = 0
             for token in tokenizer.tokenize(message.content):
-                #a += 1
-                # sent += str(token) + "\n"
                 tokens.append(token.surface)
-                # print(str(token.surface))
-                # print(a)
             print(tokens)
+
+            """ 特定の文字列を検索 """
             #「時間割」が含まれていたとき
             for i in range(len(tokens)):
                 if tokens[i] == "時間割":
@@ -246,12 +263,10 @@ async def on_message(message):
                             f = open(schedule_files[j.name], 'r', encoding='utf_8')
                             sent = schedule_check(datetime.datetime.now(), j.name, f.readlines())
                             f.close()
-            # print("schedule check")
             #「ありがとう」が含まれていたとき
             for i in range(len(tokens)):
                 if tokens[i] == "ありがとう":
                     sent = "礼には及びません、当然のことです。"
-            # print("arigato check")
             #「意味」「とは」が含まれていたとき
             for i in range(len(tokens)):
                 if tokens[i] == "意味":
@@ -272,13 +287,11 @@ async def on_message(message):
                         word = search_check(i,tokens)
                         sent = search_google(word)
                         break
-            # print("google check")
             
     if not sent == "":
         if len(sent) > 2000:
             sent = "文章が長すぎます。botから2000字以上のメッセージを送ることはできません。"
         print(sent)
-        # print("pless 'e' and 'x' to stop this bot>>")
         await message.channel.send(sent)
 
 # 没案
@@ -295,6 +308,9 @@ def key_check():
         time.sleep(0.1)
 """
 
+# 没案
+# シンプルにbotの処理を継続させつつinputを待機しようと思ったがなんかダメ
+"""
 async def key_check():
     global exit_bool
     loop = asyncio.get_event_loop()
@@ -303,6 +319,7 @@ async def key_check():
         if i == "ex":
             exit_bool = True
             break
+"""
 
 # 没案
 # botとキーボード入力検出ループ開始(WSL上では上手く動きませんでした)
