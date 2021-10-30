@@ -1,5 +1,5 @@
+import re
 import sys
-import time
 import asyncio
 import discord
 import requests
@@ -9,9 +9,12 @@ from bs4 import BeautifulSoup
 from urllib.parse import unquote
 from janome.tokenizer import Tokenizer
 
+f = open("token_and_id.txt", 'r', encoding='utf_8')
+tokenid = f.readlines()
+f.close()
 
-bot_token = "himitsu"
-channel_id = 0
+bot_token = tokenid[0]
+channel_id = int(tokenid[1])
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 
@@ -36,6 +39,15 @@ async def loop():
 """
 
 
+@tasks.loop(hours=1.0)
+async def news_loop():
+    news = check_news()
+    if not news == None:
+        channel = client.get_channel(channel_id)
+        print(news)
+        await channel.send(news)
+
+
 """ membersリストの中から自分を見つける（≒自分のmember型を返す）、これやってくれるやつ絶対discord.pyにあるだろ """
 def find_self_in_members(members):
     for member in members:
@@ -56,41 +68,52 @@ def search_channel_to_speak(text_channels):
     return None
 
 
-# 終了処理、herokuなどで常駐できるようになれば不要
-async def exit_bot():
-    channel = client.get_channel(channel_id)
-    logout_message = ""
-    logout_time = datetime.datetime.now()
-    if logout_time.hour < 5:
-        logout_message = "みなさん、私は夜更かししすぎてしまいました…おやすみなさい…:zzz:"
-    elif logout_time.hour < 10:
-        logout_message = "みなさん、あともう少しだけ寝かせてください…:zzz:"
-    elif logout_time.hour < 12:
-        logout_message = "みなさん、私はお昼寝します…おやすみなさい…:zzz:"
-    elif logout_time.hour < 15:
-        logout_message = "お昼ご飯を食べて眠たくなってしまいました…私はお昼寝します…:zzz:"
-    elif logout_time.hour < 21:
-        logout_message = "みなさん、私は少し早めに眠らせていただきます…おやすみなさい…:zzz:"
-    else:
-        logout_message = "みなさん、私はそろそろ眠らせていただきます…おやすみなさい…:zzz:"
-    print(logout_message)
-    await channel.send(logout_message)
-    sys.exit()
-
-
 """ 時間割の文字列を作成し返す """
-def schedule_check(atime, classstr, datalines):
-    send_schedule = "本日" + days[atime.weekday()] + "曜日の" + classstr + "の時間割です(後期時間割より)。\n======================================\n"
-    schedule = datalines[atime.weekday()].split()
+def schedule_check(time_arg, class_name, datalines):
+    send_schedule = "本日" + days[time_arg.weekday()] + "曜日の" + class_name + "の時間割です(後期時間割より)。\n======================================\n"
+    schedule = datalines[time_arg.weekday()].split()
     if schedule[0] == "none":
-        send_schedule = "本日" + days[atime.weekday()] + "曜日は" + classstr + "の授業はありません。"
+        send_schedule = "本日" + days[time_arg.weekday()] + "曜日は" + class_name + "の授業はありません。"
     else:
         for i in range(len(schedule)):
             send_schedule += str(i+1) + "時間目:" + schedule[i] + "\n"
     return send_schedule
 
 
-""" "https://www.google.com/search?q="以降の文字列を作成 """
+""" 苫小牧高専のホームページから最新のお知らせを取得、保存されているお知らせの日付より新しい場合タイトルと内容の一部を返す """
+def check_news():
+    f = open("newest_news.txt", 'r', encoding='utf_8')
+    have_date = f.read().split(',')
+    f.close()
+    print("have_date is " + str(have_date))
+
+    news_url = "https://www.tomakomai-ct.ac.jp/news"
+    html = requests.get(news_url)
+    soup = BeautifulSoup(html.content, "html.parser")
+    link_title = soup.select_one("[class='post clearfix']")
+    got_date = re.split("[年月日]", link_title.select_one(".daytime").get_text())
+    print("got_date is " + str(got_date))
+
+    if got_date == "":
+        rtn_news = None
+    else:
+        if (have_date[0] < got_date[0] or
+            have_date[0] == got_date[0] and have_date[1] < got_date[1] or
+            have_date[0] == got_date[0] and have_date[1] == got_date[1] and have_date[2] < got_date[2]
+            ):
+            f = open("newest_news.txt", 'w')
+            f.write(got_date[0] + ',' + got_date[1] + ',' + got_date[2])
+            f.close()
+            rtn_news = "苫小牧高専ホームページのお知らせが更新されました。\n詳細は該当ページにて確認してください。(https://www.tomakomai-ct.ac.jp/news)\n======================================\n"
+            rtn_news += link_title.select_one(".title").get_text() + '\n'
+            rtn_news += link_title.select_one("[class='inner clearfix'] > p").get_text() + '\n'
+        else:
+            rtn_news = None
+
+    return rtn_news
+
+
+""" https://www.google.com/search?q=以降の文字列を作成 """
 def search_check(count,atoken):
     print(atoken)
     returnchar = ""
@@ -191,40 +214,45 @@ async def on_ready():
     await channel.send(login_message)
 
 
+""" 終了処理、herokuなどで常駐できるようになれば不要 """
+async def exit_bot():
+    channel = client.get_channel(channel_id)
+    logout_message = ""
+    logout_time = datetime.datetime.now()
+    if logout_time.hour < 5:
+        logout_message = "みなさん、私は夜更かししすぎてしまいました…おやすみなさい…:zzz:"
+    elif logout_time.hour < 10:
+        logout_message = "みなさん、あともう少しだけ寝かせてください…:zzz:"
+    elif logout_time.hour < 12:
+        logout_message = "みなさん、私はお昼寝します…おやすみなさい…:zzz:"
+    elif logout_time.hour < 15:
+        logout_message = "お昼ご飯を食べて眠たくなってしまいました…私はお昼寝します…:zzz:"
+    elif logout_time.hour < 21:
+        logout_message = "みなさん、私は少し早めに眠らせていただきます…おやすみなさい…:zzz:"
+    else:
+        logout_message = "みなさん、私はそろそろ眠らせていただきます…おやすみなさい…:zzz:"
+    print(logout_message)
+    await channel.send(logout_message)
+    sys.exit()
+
+
 """ サーバーにほかのメンバーが参加したとき """
 @client.event
 async def on_member_join(member):
-    print("\fいらっしゃいませ、" + member.name + "さま！")
+    channel = search_channel_to_speak(member.guild.text_channels)
     channel = client.get_channel(channel_id)
-    await channel.send("いらっしゃいませ、" + member.name + "さま！")
-
-"""
-    for i in member.guild.channels:
-        if type(i) == discord.channel.TextChannel and count == 0:
-            count += 1
-        elif type(i) == discord.channel.TextChannel:
-            await i.send("いらっしゃいませ、" + member.name + "さま！")
-            break
-"""
+    welcome_message = "\fいらっしゃいませ、" + member.name + "さま！"
+    print(welcome_message)
+    await channel.send(welcome_message)
 
 
 """ サーバー参加時 """
 @client.event
 async def on_guild_join(guild):
-    channel = client.get_channel(channel_id)
+    channel = search_channel_to_speak(guild.text_channels)
     join_message = "はじめまして。" + guild.name + "のみなさま、廸無 導（みちなし しるべ）と申します。\n文章の解析やその他ちょっとした機能があります。また機能の追加もありますのでぜひご利用くださいませ。"
     print(join_message)
     await channel.send(join_message)
-
-    #将来的にはメッセージ送信権限を確認して権限のあるチャンネルに送信する
-"""
-    for i in guild.channels:
-        if type(i) == discord.channel.TextChannel and count == 0:
-            count += 1
-        elif type(i) == discord.channel.TextChannel:
-            await i.send("はじめまして。" + guild.name + "のみなさま、廸無 導（みちなし しるべ）と申します。\n文章の解析やその他ちょっとした機能があります。また機能の追加もありますのでぜひご利用くださいませ。")
-            break
-"""
 
 
 # メッセージ受信時
@@ -245,6 +273,11 @@ async def on_message(message):
                 await exit_bot()
             elif message.content == "//test":
                 await search_channel_to_speak(message.guild.text_channels).send("test succeeded")
+            elif message.content == "//news":
+                    news = check_news()
+                    if not news == None:
+                        print(news)
+                        await message.channel.send(news)
 
             """ 文章を形態素解析して単語ごとに分ける """
             tokens = []
@@ -284,6 +317,11 @@ async def on_message(message):
             for i in range(len(tokens)):
                 if tokens[i] == "ググ":
                     if tokens[i+1] == "って" or tokens[i+1] == "れ":
+                        word = search_check(i,tokens)
+                        sent = search_google(word)
+                        break
+                elif tokens[i] == "検索":
+                    if tokens[i+1] == "し" and tokens[i+2] == "て" or tokens[i+1] == "しろ":
                         word = search_check(i,tokens)
                         sent = search_google(word)
                         break
