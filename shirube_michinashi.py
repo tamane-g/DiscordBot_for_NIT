@@ -182,7 +182,7 @@ def SearchGoogle(searchwords):
 
 
 # wikipediaの検索ページをスクレイピングし、送信するメッセージを作成
-# ほとんどSearchGoogle関数と同じ
+# ほとんどSearchGoogleと同じ
 def SearchWikipedia(searchwords):
     if searchwords != None:
         result = ""
@@ -206,9 +206,17 @@ def SearchWikipedia(searchwords):
 
         # 完全一致するページがあるときはタイトルリンク原文一段落を返す
         else:
+            result += "こちらのリンクにて参照してください。\n======================================\n"
             result += soup.select(".firstHeading")[0].get_text() + "\n"
-            for i in soup.select(".mw-perser-output > p"):
-                result += i.get_text()
+            exp_texts = soup.select(".mw-parser-output > p")
+
+            # 原文一段落を取得（pタグはなにもないことがある）
+            exp_text = exp_texts[0]
+            for i in exp_texts:
+                if i.get_text().replace("\n", "") != "":
+                    exp_text = i
+                    break
+            result += exp_text.get_text()
             result += "\n参照元\n" + result_url.replace("%","%%")
         return result
 
@@ -332,13 +340,11 @@ async def on_message(message):
 
             for i in range(len(tokens)):
                 if tokens[i] == "意味":
-                    sent = "こちらのリンクにて参照してください。\n"
                     word = MakeSearchWords(i,tokens)
                     sent += SearchWikipedia(word)
                     break
                 elif len(tokens) > i+1:
                     if tokens[i] == "と" and tokens[i+1] == "は":
-                        sent = "こちらのリンクにて参照してください。\n"
                         word = MakeSearchWords(i,tokens)
                         sent += SearchWikipedia(word)
                         break
