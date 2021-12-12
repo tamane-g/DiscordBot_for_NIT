@@ -11,20 +11,28 @@ bot運用時の諸注意
 
 ・時間割は空白区切り、曜日ごとに改行して授業がない日はNoneとしてください。
 
+・task.txtは、課題を行ごとに分けて表記します。
+　 [ユーザーID,課題名,年,月,日,時,分]
+　のように表記してください。実行前に中身まで用意しておく必要はありません。
+
+・token_and_id.txtは、botトークンとメインチャンネルidを行で区切って表記します。カンマ等は必要ありません。
+　実行・運用前に事前に用意しておいてください。
+
+・newest_news.txtは日付をカンマで区切って表記します。
+　 [年,月,日]
+　のように表記してください。一度大昔の日時を書けば勝手に更新されます。
+
 """
 
-# 父親に貸してもらい読んでいる「リーダブルコード」、面白いのでおすすめ
-# 普通に役立つから絶対読んだほうがいい
-
-import re
 import sys
 import discord
-import requests
 import datetime
 from discord.ext import tasks
-from bs4 import BeautifulSoup
-from urllib.parse import unquote
 from janome.tokenizer import Tokenizer
+from shirube_module import task_mgmt
+from shirube_module import nittc_news
+from shirube_module import basic_module
+from shirube_module import search_module
 
 f = open("token_and_id.txt", 'r', encoding='utf_8')
 tokenid = f.readlines()
@@ -41,25 +49,11 @@ days = ["月","火","水","木","金","土","日"]
 schedule_files = {"1組":'1組時間割.txt', "2組":'2組時間割.txt', "3組":'3組時間割.txt', "4組":'4組時間割.txt', "5組":'5組時間割.txt', }
 
 
-# membersリストの中から自分を見つける（≒自分のmember型を返す）
-# discord.pyのリファレンス見ても見つからなかったので仕方なく実装
-def FindSelfInMembers(members):
-    for member in members:
-        if member.id == client.user.id:
-            return member
-    print("client not found")
-    return None
-
-
-# 引数に指定されたテキストチャンネルのリストから発言可能なチャンネルを1つ返す
-def SearchChannelToSpeak(text_channels):
-    for channel in text_channels:
-        self_member = FindSelfInMembers(channel.members)
-        if self_member != None:
-            if channel.permissions_for(self_member).send_messages:
-                return channel
-    print("channel not found")
-    return None
+# 1時間ごとにNewsCheck()を実行する
+@tasks.loop(minutes=1.0)
+async def main_loop():
+    await nittc_news.SendNews(client.get_channel(channel_id))
+    await task_mgmt.UpdateTasks(datetime.datetime.now(),client.get_channel(channel_id))
 
 
 # 時間割を知らせる文字列を作成し返す
@@ -72,156 +66,6 @@ def ScheduleCheck(time_arg, class_name, datalines):
         for i in range(len(schedule)):
             send_schedule += str(i+1) + "時間目:" + schedule[i] + "\n"
     return send_schedule
-
-
-# 1時間ごとにNewsCheck()を実行する
-@tasks.loop(hours=1.0)
-async def news_loop():
-    news = NewsCheck()
-    if not news == None:
-        channel = client.get_channel(channel_id)
-        print(news)
-        await channel.send(news)
-
-
-# 苫小牧高専のホームページから最新のお知らせを取得、保存されているお知らせの日付より新しい場合タイトルと内容の一部を返す
-def NewsCheck():
-    # 前回取得したニュースの日付を読み込む
-    f = open("newest_news.txt", 'r', encoding='utf_8')
-    have_date = f.read().split(',')
-    f.close()
-
-    # ホームページから最新のニュースを取得
-    news_url = "https://www.tomakomai-ct.ac.jp/news"
-    html = requests.get(news_url)
-    soup = BeautifulSoup(html.content, "html.parser")
-    link_title = soup.select_one("[class='post clearfix']")
-
-    # 最新のニュースの日付を抽出
-    got_date = re.split("[年月日]", link_title.select_one(".daytime").get_text())
-
-    # 取得済みのニュースよりも最新のニュースの日付のほうが新しいとき
-    if got_date != "":
-        if (have_date[0] < got_date[0] or
-            have_date[0] == got_date[0] and have_date[1] < got_date[1] or
-            have_date[0] == got_date[0] and have_date[1] == got_date[1] and have_date[2] < got_date[2]
-            ):
-
-            # 最新のニュースの日付を更新
-            f = open("newest_news.txt", 'w')
-            f.write(got_date[0] + ',' + got_date[1] + ',' + got_date[2])
-            f.close()
-
-            # 送信するメッセージを作成
-            rtn_news = "苫小牧高専ホームページのお知らせが更新されました。\n詳細は該当ページにて確認してください。(https://www.tomakomai-ct.ac.jp/news)\n======================================\n"
-            rtn_news += link_title.select_one(".title").get_text() + '\n'
-            rtn_news += link_title.select_one("[class='inner clearfix'] > p").get_text() + '\n'
-            return rtn_news
-
-    # 別にそんなことないとき
-    return None
-
-
-# WikipediaやGoogleのURLの検索ワード要素を作成 
-def MakeSearchWords(count,tokens):
-    print(tokens)
-    returnchar = ""
-    if count >= 2:
-        # 「OOでググって」などの場合
-        if tokens[count-1] == "と" or tokens[count-1] == "で" or tokens[count-1] == "の":
-            for i in range(count-1):
-                returnchar += tokens[i]
-        # 「OOとは」などの場合
-        else:
-            for i in range(count):
-                returnchar += tokens[i]
-    elif count == 1:
-        returnchar = tokens[0]
-    else:
-        return None
-
-    return returnchar.replace(" ","+").replace("　","+")
-
-
-# googleの検索ページをスクレイピングし、送信するメッセージを作成
-# searchwordsはMakeSearchWordsの返り値
-def SearchGoogle(searchwords):
-    if searchwords != None:
-        try:
-            # googleの検索ページを取得、検索結果を取得
-            load_url = "https://www.google.com/search?q=" + searchwords
-            print(load_url)
-            html = requests.get(load_url)
-            soup = BeautifulSoup(html.content, "html.parser")
-            link_title = soup.select(".kCrYT > a")
-
-            # 検索上位サイトのタイトルとURLを取得する
-            # BeautifulSoupのfindメソッドは上から見つけていきます
-            length = len(link_title) if len(link_title) < 3 else 3 
-            result = "了解いたしました。以下が検索結果上位" + str(length) + "サイトです。\n======================================\n"
-            for i in range(length):
-                result += link_title[i].find("h3").get_text() + "\n" # サイトのタイトル
-
-                # サイトのURL（余計な文字列がくっつくことがあるので取り除く）
-                url = unquote(link_title[i].get("href").replace("/url?q=",""))
-                result += url[0:url.find("&sa=U")] + "\n\n" # こっちは標準ライブラリのほうのfindメソッド
-            return result
-
-        # なぜかたまにエラー吐きます。原因は不明
-        except Exception as e:
-            f = open('bot_error.txt', 'w', encoding='UTF-8')
-            f.write("type : " + str(type(e)) + "\n")
-            f.write("type : " + str(e.args) + "\n")
-            f.write("type : " + str(e) + "\n")
-            f.write("source : " + str(soup) + "\n")
-            f.close()
-            return "申し訳ありません。検索結果を取得できませんでした。（" + str(type(e)) + "）\nエラーの詳しい内容はbot_error.txtを参照してください。"
-
-    else:
-        return "検索対象を指定してください。"
-
-
-# wikipediaの検索ページをスクレイピングし、送信するメッセージを作成
-# ほとんどSearchGoogleと同じ
-def SearchWikipedia(searchwords):
-    if searchwords != None:
-        result = ""
-        result_url = "https://ja.wikipedia.org/w/index.php?search=" + searchwords
-        html = requests.get(result_url)
-        soup = BeautifulSoup(html.content, "html.parser")
-
-        # 完全一致するページがないとき見出しが「検索結果」となる
-        if soup.select(".firstHeading")[0].get_text() == "検索結果":
-            result += "検索の結果wikipediaにそのような項目はありませんでした。\nwikipedia検索結果上位に該当する項目は以下です。\n======================================\n"
-            link_title = soup.select("div.mw-search-result-heading > a")
-            length = len(link_title) if len(link_title) < 3 else 3
-
-            # 検索の候補に1つもページがないとき
-            if length == 0:
-                result = "wikipediaにそのような項目はありませんでした。\nwikipedia検索においても該当するページはありませんでした。\n検索ワードを変えて試してみてはいかがでしょうか。"
-            for i in range(length):
-                result += link_title[i].get("title") + "\n"
-                print(link_title[i].get("href"))
-                result += "https://ja.wikipedia.org" + unquote(link_title[i].get("href")) + "\n\n"
-
-        # 完全一致するページがあるときはタイトルリンク原文一段落を返す
-        else:
-            result += "こちらのリンクにて参照してください。\n======================================\n"
-            result += soup.select(".firstHeading")[0].get_text() + "\n"
-            exp_texts = soup.select(".mw-parser-output > p")
-
-            # 原文一段落を取得（pタグはなにもないことがある）
-            exp_text = exp_texts[0]
-            for i in exp_texts:
-                if i.get_text().replace("\n", "") != "":
-                    exp_text = i
-                    break
-            result += exp_text.get_text()
-            result += "\n参照元\n" + result_url.replace("%","%%")
-        return result
-
-    else:
-        return "検索対象を指定してください。"
 
 
 # ログイン時処理
@@ -275,7 +119,7 @@ async def ExitBot():
 # サーバーにほかのメンバーが参加したとき
 @client.event
 async def on_member_join(member):
-    channel = SearchChannelToSpeak(member.guild.text_channels)
+    channel = basic_module.SearchChannelToSpeak(member.guild.text_channels,client.user)
     channel = client.get_channel(channel_id)
     welcome_message = "\fいらっしゃいませ、" + member.name + "さま！"
     print(welcome_message)
@@ -285,7 +129,7 @@ async def on_member_join(member):
 # サーバー参加時
 @client.event
 async def on_guild_join(guild):
-    channel = SearchChannelToSpeak(guild.text_channels)
+    channel = basic_module.SearchChannelToSpeak(guild.text_channels,client.user)
     join_message = "はじめまして。" + guild.name + "のみなさま、廸無 導（みちなし しるべ）と申します。\n文章の解析やその他ちょっとした機能があります。また機能の追加もありますのでぜひご利用くださいませ。"
     print(join_message)
     await channel.send(join_message)
@@ -309,13 +153,11 @@ async def on_message(message):
             if message.content == "//end":
                 await ExitBot()
             elif message.content == "//test":
-                await SearchChannelToSpeak(message.guild.text_channels).send("test succeeded")
+                await basic_module.SearchChannelToSpeak(message.guild.text_channels,client.user).send("test succeeded")
             elif message.content == "//news":
-                    news = NewsCheck()
-                    if not news == None:
-                        print(news)
-                        await message.channel.send(news)
-
+                await nittc_news.SendNews(client.get_channel(channel_id))
+            elif message.content == "//task":
+                await task_mgmt.UpdateTasks(datetime.datetime.now(),client.get_channel(channel_id))
             # 文章を形態素解析して単語ごとに分ける
             tokens = []
             for token in tokenizer.tokenize(message.content):
@@ -340,25 +182,25 @@ async def on_message(message):
 
             for i in range(len(tokens)):
                 if tokens[i] == "意味":
-                    word = MakeSearchWords(i,tokens)
-                    sent += SearchWikipedia(word)
+                    word = search_module.MakeSearchWords(i,tokens)
+                    sent += search_module.SearchWikipedia(word)
                     break
                 elif len(tokens) > i+1:
                     if tokens[i] == "と" and tokens[i+1] == "は":
-                        word = MakeSearchWords(i,tokens)
-                        sent += SearchWikipedia(word)
+                        word = search_module.MakeSearchWords(i,tokens)
+                        sent += search_module.SearchWikipedia(word)
                         break
 
             for i in range(len(tokens)):
                 if tokens[i] == "ググ":
                     if tokens[i+1] == "って" or tokens[i+1] == "れ":
-                        word = MakeSearchWords(i,tokens)
-                        sent = SearchGoogle(word)
+                        word = search_module.MakeSearchWords(i,tokens)
+                        sent = search_module.SearchGoogle(word)
                         break
                 elif tokens[i] == "検索":
                     if tokens[i+1] == "し" and tokens[i+2] == "て" or tokens[i+1] == "しろ":
-                        word = MakeSearchWords(i,tokens)
-                        sent = SearchGoogle(word)
+                        word = search_module.MakeSearchWords(i,tokens)
+                        sent = search_module.SearchGoogle(word)
                         break
 
     # 長すぎるとdiscordのほうから蹴られます
